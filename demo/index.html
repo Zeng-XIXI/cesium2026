@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>DeepSeek SSE Markdown流式</title>
+  <!-- 引入marked markdown解析库 -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    #answer {
+      margin-top:20px;
+      padding:12px;
+      border:1px solid #eee;
+      border-radius: 8px;
+      min-height:120px;
+    }
+    /* 简单美化markdown样式 */
+    #answer pre {
+      background:#f5f5f5;
+      padding:8px;
+      overflow-x:auto;
+    }
+    #answer table {
+      border-collapse: collapse;
+    }
+    #answer td, #answer th {
+      border:1px solid #ccc;
+      padding:4px 8px;
+    }
+  </style>
+</head>
+<body>
+  <div>提问：<input id="question" value="简单介绍SSE是什么" style="width:400px"></div>
+  <div id="answer"></div>
+  <button onclick="send()">发送</button>
+  <button onclick="test()">测试</button>
+
+<script>
+async function test(){
+  const question = document.getElementById("question").value;
+  const answerDom = document.getElementById("answer");
+  let fullText = "SSE 全称 Server-Sent Events（服务器发送事件";
+  answerDom.innerHTML = marked.parse(fullText);
+}
+
+async function send(){
+  const question = document.getElementById("question").value;
+  const answerDom = document.getElementById("answer");
+  let fullText = ""; // 保存完整markdown字符串
+  answerDom.innerHTML = "";
+
+  const resp = await fetch("http://127.0.0.1:8000/chat",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({prompt: question})
+  })
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+
+  while(true){
+    const {done, value} = await reader.read();
+    if(done) break;
+    buffer += decoder.decode(value, {stream:true});
+    const chunks = buffer.split("\n\n");
+    buffer = chunks.pop();
+
+    for(let chunk of chunks){
+      if(!chunk.startsWith("data: ")) continue;
+      const dataStr = chunk.replace("data: ","").trim();
+      if(dataStr === "[DONE]") {
+        console.log("流式结束");
+        continue;
+      }
+      try{
+        const json = JSON.parse(dataStr);
+        const delta = json.choices[0].delta.content || "";
+        // 累加增量文本
+        fullText += delta;
+        // markdown转html，渲染到页面
+        answerDom.innerHTML = marked.parse(fullText);
+      }catch(e){
+        console.log("parse skip", chunk);
+      }
+    }
+  }
+}
+</script>
+</body>
+</html>
