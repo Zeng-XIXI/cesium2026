@@ -1,11 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Cartesian2,
   Cartesian3,
+  Cartographic,
   Color,
+  EllipsoidGeodesic,
   ImageryLayer,
   LabelStyle,
   OpenStreetMapImageryProvider,
+  TileCoordinatesImageryProvider,
   VerticalOrigin,
   Viewer,
 } from "cesium";
@@ -15,21 +18,84 @@ import MapToolButtons from "./components/MapToolButtons.jsx";
 import TargetPanel from "./components/TargetPanel.jsx";
 import { mockTargets } from "./data/mockTargets.js";
 import { StaticTarget } from "./models/StaticTarget.js";
+import {
+  aggregateTargetsByGrid,
+  getGridLevelByHeight,
+} from "./utils/targetGrid.js";
 import { getTargetIcon } from "./utils/targetIcons.js";
 import {
   askLocalAssistant,
   streamDeepSeek,
 } from "./services/assistantService.js";
 
+const cssPixelMeters = 0.0254 / 96;
+
+function readViewMetrics(viewer) {
+  const { camera, scene } = viewer;
+  const { clientWidth, clientHeight } = scene.canvas;
+  const samplePixels = Math.min(100, clientWidth / 5);
+  const center = new Cartesian2(clientWidth / 2, clientHeight / 2);
+  const leftRay = camera.getPickRay(
+    new Cartesian2(center.x - samplePixels / 2, center.y),
+  );
+  const rightRay = camera.getPickRay(
+    new Cartesian2(center.x + samplePixels / 2, center.y),
+  );
+  const left = leftRay && scene.globe.pick(leftRay, scene);
+  const right = rightRay && scene.globe.pick(rightRay, scene);
+  let scale = null;
+
+  if (left && right) {
+    const distance = new EllipsoidGeodesic(
+      Cartographic.fromCartesian(left),
+      Cartographic.fromCartesian(right),
+    ).surfaceDistance;
+    scale = Math.round(distance / samplePixels / cssPixelMeters);
+  }
+
+  return {
+    height: camera.positionCartographic.height,
+    scale,
+  };
+}
+
+function formatHeight(height) {
+  return height >= 1000
+    ? `${(height / 1000).toLocaleString("zh-CN", { maximumFractionDigits: 1 })} km`
+    : `${Math.round(height)} m`;
+}
+
+function formatScale(scale) {
+  return scale ? `1 : ${scale.toLocaleString("zh-CN")}` : "无法计算";
+}
+
 export default function App() {
   const containerRef = useRef(null);
   const viewerRef = useRef(null);
+  const gridLayerRef = useRef(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
+  const [gridVisible, setGridVisible] = useState(false);
+  const [metricsVisible, setMetricsVisible] = useState(false);
+  const [viewMetrics, setViewMetrics] = useState({
+    height: 12_500_000,
+    scale: null,
+  });
   const [targets, setTargets] = useState(mockTargets);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [showTargetNames, setShowTargetNames] = useState(true);
+  const [gridLevel, setGridLevel] = useState(() =>
+    getGridLevelByHeight(12_500_000),
+  );
   const [message, setMessage] = useState("");
+  const displayTargets = useMemo(
+    () =>
+      aggregateTargetsByGrid(
+        targets.filter((target) => selectedIds.has(target.id)),
+        gridLevel,
+      ),
+    [gridLevel, selectedIds, targets],
+  );
 
   useEffect(() => {
     const viewer = new Viewer(containerRef.current, {
@@ -45,9 +111,18 @@ export default function App() {
     viewer.camera.setView({
       destination: Cartesian3.fromDegrees(104, 35, 12500000),
     });
+    const updateGridLevel = () => {
+      setGridLevel(
+        getGridLevelByHeight(viewer.camera.positionCartographic.height),
+      );
+    };
+    viewer.camera.moveEnd.addEventListener(updateGridLevel);
+    updateGridLevel();
     viewerRef.current = viewer;
 
     return () => {
+      viewer.camera.moveEnd.removeEventListener(updateGridLevel);
+      gridLayerRef.current = null;
       viewerRef.current = null;
       viewer.destroy();
     };
@@ -55,54 +130,106 @@ export default function App() {
 
   useEffect(() => {
     const viewer = viewerRef.current;
+    if (!metricsVisible || !viewer || viewer.isDestroyed()) {
+      return undefined;
+    }
+
+    const previousPercentageChanged = viewer.camera.percentageChanged;
+    let lastUpdatedAt = -Infinity;
+    const updateMetrics = () => {
+      const now = performance.now();
+      if (now - lastUpdatedAt < 100) {
+        return;
+      }
+      lastUpdatedAt = now;
+      setViewMetrics(readViewMetrics(viewer));
+    };
+
+    viewer.camera.percentageChanged = 0.001;
+    viewer.camera.changed.addEventListener(updateMetrics);
+    viewer.camera.moveEnd.addEventListener(updateMetrics);
+    updateMetrics();
+
+    return () => {
+      viewer.camera.changed.removeEventListener(updateMetrics);
+      viewer.camera.moveEnd.removeEventListener(updateMetrics);
+      viewer.camera.percentageChanged = previousPercentageChanged;
+    };
+  }, [metricsVisible]);
+
+  useEffect(() => {
+    const viewer = viewerRef.current;
     if (!viewer || viewer.isDestroyed()) {
       return undefined;
     }
 
-    const entityIds = targets
-      .filter((target) => selectedIds.has(target.id))
-      .map((target) => {
-        const entityId = `static-target:${target.id}`;
+    const clusterCategoryIds = [
+      ...new Set(
+        displayTargets
+          .filter((target) => target.isCluster)
+          .map((target) => target.categoryId),
+      ),
+    ];
+    const entityIds = displayTargets.map((target) => {
+      const entityId = `static-target:${target.id}`;
+      const categoryIndex = clusterCategoryIds.indexOf(target.categoryId);
+      const hasClusterOffset = target.isCluster && clusterCategoryIds.length > 1;
+      const categoryAngle = hasClusterOffset
+        ? (categoryIndex / clusterCategoryIds.length) * Math.PI * 2
+        : 0;
+      const clusterOffset = hasClusterOffset
+        ? new Cartesian2(
+            Math.round(Math.cos(categoryAngle) * 38),
+            Math.round(Math.sin(categoryAngle) * 38),
+          )
+        : new Cartesian2(0, 0);
 
-        viewer.entities.add({
-          id: entityId,
-          name: target.name,
-          position: Cartesian3.fromDegrees(
-            target.longitude,
-            target.latitude,
-            target.altitude,
+      viewer.entities.add({
+        id: entityId,
+        name: target.name,
+        position: Cartesian3.fromDegrees(
+          target.longitude,
+          target.latitude,
+          target.altitude,
+        ),
+        billboard: {
+          image: getTargetIcon(
+            target.categoryId,
+            target.color,
+            target.count,
           ),
-          billboard: {
-            image: getTargetIcon(target.categoryId, target.color),
-            width: 36,
-            height: 36,
-            verticalOrigin: VerticalOrigin.CENTER,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          },
-          label: {
-            show: showTargetNames,
-            text: target.name,
-            font: "14px sans-serif",
-            fillColor: Color.WHITE,
-            style: LabelStyle.FILL,
-            showBackground: true,
-            backgroundColor: Color.BLACK.withAlpha(0.65),
-            pixelOffset: new Cartesian2(0, -28),
-            verticalOrigin: VerticalOrigin.BOTTOM,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          },
-          description: `${target.categoryName}<br>${target.description}<br>经度：${target.longitude}<br>纬度：${target.latitude}`,
-        });
-
-        return entityId;
+          width: target.isCluster ? 44 : 36,
+          height: target.isCluster ? 44 : 36,
+          pixelOffset: clusterOffset,
+          verticalOrigin: VerticalOrigin.CENTER,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        label: {
+          show: showTargetNames,
+          text: target.isCluster
+            ? `${target.categoryName} · ${target.count}`
+            : target.name,
+          font: "14px sans-serif",
+          fillColor: Color.WHITE,
+          style: LabelStyle.FILL,
+          showBackground: true,
+          backgroundColor: Color.BLACK.withAlpha(0.65),
+          pixelOffset: new Cartesian2(clusterOffset.x, clusterOffset.y - 28),
+          verticalOrigin: VerticalOrigin.BOTTOM,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        description: `${target.categoryName}<br>${target.description}<br>经度：${target.longitude}<br>纬度：${target.latitude}`,
       });
+
+      return entityId;
+    });
 
     return () => {
       if (!viewer.isDestroyed()) {
         entityIds.forEach((entityId) => viewer.entities.removeById(entityId));
       }
     };
-  }, [selectedIds, showTargetNames, targets]);
+  }, [displayTargets, showTargetNames]);
 
   function toggleTarget(targetId, checked) {
     setSelectedIds((current) => {
@@ -128,6 +255,27 @@ export default function App() {
       });
       return next;
     });
+  }
+
+  function toggleGrid() {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed()) {
+      return;
+    }
+
+    if (gridLayerRef.current) {
+      viewer.imageryLayers.remove(gridLayerRef.current, true);
+      gridLayerRef.current = null;
+      setGridVisible(false);
+      return;
+    }
+
+    gridLayerRef.current = viewer.imageryLayers.addImageryProvider(
+      new TileCoordinatesImageryProvider({
+        color: Color.CYAN.withAlpha(0.8),
+      }),
+    );
+    setGridVisible(true);
   }
 
   async function importTargets(file) {
@@ -259,16 +407,30 @@ export default function App() {
 
       <MapToolButtons
         assistantOpen={assistantOpen}
+        gridVisible={gridVisible}
+        metricsVisible={metricsVisible}
         selectedCount={selectedIds.size}
         targetPanelOpen={panelOpen}
         onToggleAssistant={() => setAssistantOpen((open) => !open)}
+        onToggleGrid={toggleGrid}
+        onToggleMetrics={() => setMetricsVisible((visible) => !visible)}
         onToggleTargetPanel={() => setPanelOpen((open) => !open)}
       />
+
+      {metricsVisible && (
+        <section className="view-metrics-panel" aria-label="实时视角信息">
+          <span>视角高度</span>
+          <strong>{formatHeight(viewMetrics.height)}</strong>
+          <span>中心比例尺</span>
+          <strong>{formatScale(viewMetrics.scale)}</strong>
+        </section>
+      )}
 
       {panelOpen && (
         <TargetPanel
           targets={targets}
           selectedIds={selectedIds}
+          displayCount={displayTargets.length}
           showTargetNames={showTargetNames}
           message={message}
           onClose={() => setPanelOpen(false)}

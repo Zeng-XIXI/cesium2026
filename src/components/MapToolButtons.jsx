@@ -17,11 +17,32 @@ function AssistantIcon() {
   );
 }
 
+function GridIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="4" y="4" width="16" height="16" />
+      <path d="M12 4v16M4 12h16" />
+    </svg>
+  );
+}
+
+function ViewMetricsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5 18h14M7 15l10-10M8 8l2 2M11 5l2 2M14 12l2 2" />
+    </svg>
+  );
+}
+
 export default function MapToolButtons({
   assistantOpen,
+  gridVisible,
+  metricsVisible,
   selectedCount,
   targetPanelOpen,
   onToggleAssistant,
+  onToggleGrid,
+  onToggleMetrics,
   onToggleTargetPanel,
 }) {
   return (
@@ -38,6 +59,26 @@ export default function MapToolButtons({
         {selectedCount > 0 && (
           <span className="tool-count-badge">{selectedCount}</span>
         )}
+      </button>
+      <button
+        className={`map-tool-button ${metricsVisible ? "is-active" : ""}`}
+        type="button"
+        aria-label="视角信息"
+        aria-pressed={metricsVisible}
+        data-tooltip="视角信息"
+        onClick={onToggleMetrics}
+      >
+        <ViewMetricsIcon />
+      </button>
+      <button
+        className={`map-tool-button ${gridVisible ? "is-active" : ""}`}
+        type="button"
+        aria-label="剖分网格"
+        aria-pressed={gridVisible}
+        data-tooltip="剖分网格"
+        onClick={onToggleGrid}
+      >
+        <GridIcon />
       </button>
       <button
         className={`map-tool-button ${assistantOpen ? "is-active" : ""}`}

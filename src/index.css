@@ -117,6 +117,32 @@ input {
   box-shadow: 0 0 0 1px #082f49;
 }
 
+.view-metrics-panel {
+  position: absolute;
+  z-index: 10;
+  top: 44px;
+  right: 150px;
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 5px 16px;
+  min-width: 220px;
+  padding: 10px 12px;
+  color: #94a3b8;
+  font-size: 12px;
+  background: rgb(15 23 42 / 92%);
+  border: 1px solid #475569;
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 28%);
+  backdrop-filter: blur(8px);
+}
+
+.view-metrics-panel strong {
+  color: #67e8f9;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600;
+  text-align: right;
+}
+
 .target-panel {
   position: absolute;
   z-index: 20;
@@ -625,6 +651,10 @@ input {
 
 @media (max-width: 640px) {
   .map-tool-buttons {
+    right: 118px;
+  }
+
+  .view-metrics-panel {
     right: 118px;
   }
 }

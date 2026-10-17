@@ -82,6 +82,7 @@ function CategoryGroup({
 export default function TargetPanel({
   targets,
   selectedIds,
+  displayCount,
   showTargetNames,
   message,
   onClose,
@@ -137,7 +138,7 @@ export default function TargetPanel({
         <div>
           <h1>目标数据</h1>
           <p>
-            已上图 {selectedIds.size} / {targets.length}
+            已选择 {selectedIds.size} / {targets.length} · 地图显示 {displayCount}
           </p>
         </div>
         <button

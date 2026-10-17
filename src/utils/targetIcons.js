@@ -39,10 +39,17 @@ function safeColor(color) {
   return /^#[0-9a-f]{6}$/i.test(color) ? color : "#38bdf8";
 }
 
-export function getTargetIcon(categoryId, color) {
+export function getTargetIcon(categoryId, color, count = 1) {
   const backgroundColor = safeColor(color);
   const iconType = iconMarkup[categoryId] ? categoryId : "default";
-  const cacheKey = `${iconType}:${backgroundColor}`;
+  const clusterCount = Number.isInteger(count) && count > 1 ? count : 1;
+  const badgeText = clusterCount > 99 ? "99+" : String(clusterCount);
+  const badge =
+    clusterCount > 1
+      ? `<circle cx="38" cy="10" r="9" fill="#0f172a" stroke="white" stroke-width="1.5" />
+         <text x="38" y="13" fill="white" stroke="none" font-family="sans-serif" font-size="9" font-weight="700" text-anchor="middle">${badgeText}</text>`
+      : "";
+  const cacheKey = `${iconType}:${backgroundColor}:${clusterCount}`;
 
   if (!iconCache.has(cacheKey)) {
     const svg = `
@@ -51,6 +58,7 @@ export function getTargetIcon(categoryId, color) {
         <g fill="none" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
           ${iconMarkup[iconType]}
         </g>
+        ${badge}
       </svg>
     `;
     iconCache.set(
