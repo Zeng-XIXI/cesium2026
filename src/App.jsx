@@ -15,6 +15,7 @@ import MapToolButtons from "./components/MapToolButtons.jsx";
 import TargetPanel from "./components/TargetPanel.jsx";
 import { mockTargets } from "./data/mockTargets.js";
 import { StaticTarget } from "./models/StaticTarget.js";
+import { getTargetIcon } from "./utils/targetIcons.js";
 import {
   askLocalAssistant,
   streamDeepSeek,
@@ -62,7 +63,6 @@ export default function App() {
       .filter((target) => selectedIds.has(target.id))
       .map((target) => {
         const entityId = `static-target:${target.id}`;
-        const color = Color.fromCssColorString(target.color);
 
         viewer.entities.add({
           id: entityId,
@@ -72,11 +72,11 @@ export default function App() {
             target.latitude,
             target.altitude,
           ),
-          point: {
-            pixelSize: 12,
-            color,
-            outlineColor: Color.WHITE,
-            outlineWidth: 2,
+          billboard: {
+            image: getTargetIcon(target.categoryId, target.color),
+            width: 36,
+            height: 36,
+            verticalOrigin: VerticalOrigin.CENTER,
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
           label: {
@@ -87,7 +87,7 @@ export default function App() {
             style: LabelStyle.FILL,
             showBackground: true,
             backgroundColor: Color.BLACK.withAlpha(0.65),
-            pixelOffset: new Cartesian2(0, -20),
+            pixelOffset: new Cartesian2(0, -28),
             verticalOrigin: VerticalOrigin.BOTTOM,
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
