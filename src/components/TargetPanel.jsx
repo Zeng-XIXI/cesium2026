@@ -82,11 +82,13 @@ function CategoryGroup({
 export default function TargetPanel({
   targets,
   selectedIds,
+  showTargetNames,
   message,
   onClose,
   onImport,
   onExport,
   onToggleCategory,
+  onToggleTargetNames,
   onToggleTarget,
 }) {
   const fileInputRef = useRef(null);
@@ -165,6 +167,21 @@ export default function TargetPanel({
       </div>
 
       {message && <p className="target-message">{message}</p>}
+
+      <label className="target-label-control">
+        <span>
+          <strong>显示目标名称</strong>
+          <small>统一控制地图上所有点位标签</small>
+        </span>
+        <span className="switch-control">
+          <input
+            type="checkbox"
+            checked={showTargetNames}
+            onChange={(event) => onToggleTargetNames(event.target.checked)}
+          />
+          <span className="switch-track" aria-hidden="true" />
+        </span>
+      </label>
 
       <div className="target-category-list">
         {categories.map((category) => (

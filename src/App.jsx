@@ -27,6 +27,7 @@ export default function App() {
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [targets, setTargets] = useState(mockTargets);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [showTargetNames, setShowTargetNames] = useState(true);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
@@ -79,6 +80,7 @@ export default function App() {
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
           label: {
+            show: showTargetNames,
             text: target.name,
             font: "14px sans-serif",
             fillColor: Color.WHITE,
@@ -100,7 +102,7 @@ export default function App() {
         entityIds.forEach((entityId) => viewer.entities.removeById(entityId));
       }
     };
-  }, [selectedIds, targets]);
+  }, [selectedIds, showTargetNames, targets]);
 
   function toggleTarget(targetId, checked) {
     setSelectedIds((current) => {
@@ -267,11 +269,13 @@ export default function App() {
         <TargetPanel
           targets={targets}
           selectedIds={selectedIds}
+          showTargetNames={showTargetNames}
           message={message}
           onClose={() => setPanelOpen(false)}
           onImport={importTargets}
           onExport={exportTargets}
           onToggleCategory={toggleCategory}
+          onToggleTargetNames={setShowTargetNames}
           onToggleTarget={toggleTarget}
         />
       )}
