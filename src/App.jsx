@@ -73,10 +73,13 @@ export default function App() {
   const containerRef = useRef(null);
   const viewerRef = useRef(null);
   const gridLayerRef = useRef(null);
+  const gridLevelRef = useRef(getGridLevelByHeight(12_500_000));
   const [panelOpen, setPanelOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [gridVisible, setGridVisible] = useState(false);
   const [metricsVisible, setMetricsVisible] = useState(false);
+  const [aggregationEnabled, setAggregationEnabled] = useState(true);
+  const [aggregationRealtime, setAggregationRealtime] = useState(false);
   const [viewMetrics, setViewMetrics] = useState({
     height: 12_500_000,
     scale: null,
@@ -84,17 +87,15 @@ export default function App() {
   const [targets, setTargets] = useState(mockTargets);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [showTargetNames, setShowTargetNames] = useState(true);
-  const [gridLevel, setGridLevel] = useState(() =>
-    getGridLevelByHeight(12_500_000),
-  );
+  const [gridLevel, setGridLevel] = useState(gridLevelRef.current);
   const [message, setMessage] = useState("");
   const displayTargets = useMemo(
     () =>
       aggregateTargetsByGrid(
         targets.filter((target) => selectedIds.has(target.id)),
-        gridLevel,
+        aggregationEnabled ? gridLevel : null,
       ),
-    [gridLevel, selectedIds, targets],
+    [aggregationEnabled, gridLevel, selectedIds, targets],
   );
 
   useEffect(() => {
@@ -111,22 +112,39 @@ export default function App() {
     viewer.camera.setView({
       destination: Cartesian3.fromDegrees(104, 35, 12500000),
     });
-    const updateGridLevel = () => {
-      setGridLevel(
-        getGridLevelByHeight(viewer.camera.positionCartographic.height),
-      );
-    };
-    viewer.camera.moveEnd.addEventListener(updateGridLevel);
-    updateGridLevel();
     viewerRef.current = viewer;
 
     return () => {
-      viewer.camera.moveEnd.removeEventListener(updateGridLevel);
       gridLayerRef.current = null;
       viewerRef.current = null;
       viewer.destroy();
     };
   }, []);
+
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!aggregationEnabled || !viewer || viewer.isDestroyed()) {
+      return undefined;
+    }
+
+    const updateGridLevel = () => {
+      const nextLevel = getGridLevelByHeight(
+        viewer.camera.positionCartographic.height,
+      );
+      if (gridLevelRef.current !== nextLevel) {
+        gridLevelRef.current = nextLevel;
+        setGridLevel(nextLevel);
+      }
+    };
+    const event = aggregationRealtime
+      ? viewer.scene.preRender
+      : viewer.camera.moveEnd;
+
+    event.addEventListener(updateGridLevel);
+    updateGridLevel();
+
+    return () => event.removeEventListener(updateGridLevel);
+  }, [aggregationEnabled, aggregationRealtime]);
 
   useEffect(() => {
     const viewer = viewerRef.current;
@@ -431,11 +449,15 @@ export default function App() {
           targets={targets}
           selectedIds={selectedIds}
           displayCount={displayTargets.length}
+          aggregationEnabled={aggregationEnabled}
+          aggregationRealtime={aggregationRealtime}
           showTargetNames={showTargetNames}
           message={message}
           onClose={() => setPanelOpen(false)}
           onImport={importTargets}
           onExport={exportTargets}
+          onToggleAggregation={setAggregationEnabled}
+          onToggleAggregationRealtime={setAggregationRealtime}
           onToggleCategory={toggleCategory}
           onToggleTargetNames={setShowTargetNames}
           onToggleTarget={toggleTarget}

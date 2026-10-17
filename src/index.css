@@ -498,6 +498,11 @@ input {
   font-size: 11px;
 }
 
+.target-label-control.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .switch-control {
   position: relative;
   flex: 0 0 auto;

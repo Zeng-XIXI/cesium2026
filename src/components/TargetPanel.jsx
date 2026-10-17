@@ -83,11 +83,15 @@ export default function TargetPanel({
   targets,
   selectedIds,
   displayCount,
+  aggregationEnabled,
+  aggregationRealtime,
   showTargetNames,
   message,
   onClose,
   onImport,
   onExport,
+  onToggleAggregation,
+  onToggleAggregationRealtime,
   onToggleCategory,
   onToggleTargetNames,
   onToggleTarget,
@@ -179,6 +183,45 @@ export default function TargetPanel({
             type="checkbox"
             checked={showTargetNames}
             onChange={(event) => onToggleTargetNames(event.target.checked)}
+          />
+          <span className="switch-track" aria-hidden="true" />
+        </span>
+      </label>
+
+      <label className="target-label-control">
+        <span>
+          <strong>网格聚合</strong>
+          <small>按类别和网格缩减地图目标</small>
+        </span>
+        <span className="switch-control">
+          <input
+            type="checkbox"
+            checked={aggregationEnabled}
+            onChange={(event) => onToggleAggregation(event.target.checked)}
+          />
+          <span className="switch-track" aria-hidden="true" />
+        </span>
+      </label>
+
+      <label
+        className={`target-label-control ${aggregationEnabled ? "" : "is-disabled"}`}
+      >
+        <span>
+          <strong>层级实时触发</strong>
+          <small>
+            {aggregationRealtime
+              ? "网格层级变化后立即重新计算"
+              : "相机停止移动后重新计算"}
+          </small>
+        </span>
+        <span className="switch-control">
+          <input
+            type="checkbox"
+            checked={aggregationRealtime}
+            disabled={!aggregationEnabled}
+            onChange={(event) =>
+              onToggleAggregationRealtime(event.target.checked)
+            }
           />
           <span className="switch-track" aria-hidden="true" />
         </span>
