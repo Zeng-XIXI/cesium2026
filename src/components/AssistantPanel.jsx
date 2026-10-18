@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import MarkdownContent from "./MarkdownContent.jsx";
 import TargetTable from "./TargetTable.jsx";
+import useDraggable from "../hooks/useDraggable.js";
 
 const initialMessages = [
   {
@@ -23,6 +24,7 @@ export default function AssistantPanel({ onClose, onSend }) {
   const [sending, setSending] = useState(false);
   const [mode, setMode] = useState("local");
   const messagesEndRef = useRef(null);
+  const { dragStyle, handlePointerDown } = useDraggable();
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -123,8 +125,12 @@ export default function AssistantPanel({ onClose, onSend }) {
   }
 
   return (
-    <aside className="assistant-panel" aria-label="智能助手对话框">
-      <header className="assistant-header">
+    <aside
+      className="assistant-panel"
+      aria-label="智能助手对话框"
+      style={dragStyle}
+    >
+      <header className="assistant-header" onPointerDown={handlePointerDown}>
         <div>
           <h1>智能助手</h1>
           <p>
@@ -135,6 +141,7 @@ export default function AssistantPanel({ onClose, onSend }) {
           className="panel-close-button"
           type="button"
           aria-label="关闭智能助手"
+          onPointerDown={(event) => event.stopPropagation()}
           onClick={onClose}
         >
           ×

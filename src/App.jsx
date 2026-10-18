@@ -8,13 +8,19 @@ import {
   ImageryLayer,
   LabelStyle,
   OpenStreetMapImageryProvider,
+  ScreenSpaceEventHandler,
+  ScreenSpaceEventType,
   TileCoordinatesImageryProvider,
   VerticalOrigin,
   Viewer,
 } from "cesium";
 import "cesium/Build/Cesium/Widgets/widgets.css";
 import AssistantPanel from "./components/AssistantPanel.jsx";
+import CirclePanel from "./components/CirclePanel.jsx";
 import MapToolButtons from "./components/MapToolButtons.jsx";
+import NearbyPanel from "./components/NearbyPanel.jsx";
+import TestDataPanel from "./components/TestDataPanel.jsx";
+import useDraggable from "./hooks/useDraggable.js";
 import TargetPanel from "./components/TargetPanel.jsx";
 import { mockTargets } from "./data/mockTargets.js";
 import { StaticTarget } from "./models/StaticTarget.js";
@@ -23,6 +29,11 @@ import {
   getGridLevelByHeight,
 } from "./utils/targetGrid.js";
 import { getTargetIcon } from "./utils/targetIcons.js";
+import {
+  buildSpatialHash,
+  queryNearbyTargets,
+} from "./utils/nearbyQuery.js";
+import { createTestTargets } from "./utils/testTargets.js";
 import {
   askLocalAssistant,
   streamDeepSeek,
@@ -134,6 +145,11 @@ export default function App() {
   const gridLevelRef = useRef(getGridLevelByHeight(12_500_000));
   const [panelOpen, setPanelOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
+  const [circlePanelOpen, setCirclePanelOpen] = useState(false);
+  const [nearbyPanelOpen, setNearbyPanelOpen] = useState(false);
+  const [testDataPanelOpen, setTestDataPanelOpen] = useState(false);
+  const [circlePickMode, setCirclePickMode] = useState(false);
+  const [nearbyPickMode, setNearbyPickMode] = useState(false);
   const [gridVisible, setGridVisible] = useState(false);
   const [metricsVisible, setMetricsVisible] = useState(false);
   const [operationStatusVisible, setOperationStatusVisible] = useState(false);
@@ -149,7 +165,18 @@ export default function App() {
   const [showTargetNames, setShowTargetNames] = useState(true);
   const [gridLevel, setGridLevel] = useState(gridLevelRef.current);
   const [message, setMessage] = useState("");
+  const [circles, setCircles] = useState([]);
+  const [selectedCircleId, setSelectedCircleId] = useState(null);
+  const [pickedCirclePoint, setPickedCirclePoint] = useState(null);
+  const [pickedNearbyPoint, setPickedNearbyPoint] = useState(null);
+  const [nearbyQueryResult, setNearbyQueryResult] = useState(null);
+  const [nearbyQueryError, setNearbyQueryError] = useState("");
+  const [nearbySelectedIds, setNearbySelectedIds] = useState(() => new Set());
   const operationStatusIdRef = useRef(0);
+  const circleIdRef = useRef(0);
+  const metricsDrag = useDraggable();
+  const operationStatusDrag = useDraggable();
+  const spatialHash = useMemo(() => buildSpatialHash(targets), [targets]);
   const displayTargets = useMemo(
     () =>
       aggregateTargetsByGrid(
@@ -310,6 +337,106 @@ export default function App() {
     };
   }, [displayTargets, showTargetNames]);
 
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed()) {
+      return undefined;
+    }
+
+    const handler = new ScreenSpaceEventHandler(viewer.scene.canvas);
+    handler.setInputAction((movement) => {
+      if (circlePickMode || nearbyPickMode) {
+        const ray = viewer.camera.getPickRay(movement.position);
+        const cartesian =
+          (ray && viewer.scene.globe.pick(ray, viewer.scene)) ||
+          viewer.camera.pickEllipsoid(movement.position, viewer.scene.globe.ellipsoid);
+        if (cartesian) {
+          const cartographic = Cartographic.fromCartesian(cartesian);
+          const point = {
+            longitude: Number(((cartographic.longitude * 180) / Math.PI).toFixed(6)),
+            latitude: Number(((cartographic.latitude * 180) / Math.PI).toFixed(6)),
+          };
+          if (circlePickMode) {
+            setPickedCirclePoint(point);
+            setCirclePickMode(false);
+            pushOperationStatus("已从地图选取圆心坐标");
+          } else {
+            setPickedNearbyPoint(point);
+            setNearbyPickMode(false);
+            pushOperationStatus("已从地图选取近邻查询点");
+          }
+        }
+        return;
+      }
+
+      const picked = viewer.scene.pick(movement.position);
+      const entity = picked?.id;
+      const entityId = typeof entity === "string" ? entity : entity?.id;
+      if (entityId?.startsWith("map-circle:")) {
+        setSelectedCircleId(entityId.slice("map-circle:".length));
+      } else {
+        setSelectedCircleId(null);
+      }
+    }, ScreenSpaceEventType.LEFT_CLICK);
+
+    return () => handler.destroy();
+  }, [circlePickMode, nearbyPickMode]);
+
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed()) {
+      return undefined;
+    }
+
+    const visibleCircleIds = circles
+      .filter((circle) => circle.visible)
+      .map((circle) => {
+        const entityId = `map-circle:${circle.id}`;
+        const color = Color.fromCssColorString(circle.color);
+        viewer.entities.add({
+          id: entityId,
+          name: circle.id,
+          position: Cartesian3.fromDegrees(circle.longitude, circle.latitude),
+          ellipse: {
+            semiMajorAxis: circle.radius * 1000,
+            semiMinorAxis: circle.radius * 1000,
+            height: 0,
+            material: color.withAlpha(0.2),
+            outline: true,
+            outlineColor: color,
+            outlineWidth: selectedCircleId === circle.id ? 4 : 2,
+          },
+        });
+        return entityId;
+      });
+
+    return () => {
+      if (!viewer.isDestroyed()) {
+        visibleCircleIds.forEach((entityId) => viewer.entities.removeById(entityId));
+      }
+    };
+  }, [circles, selectedCircleId]);
+
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (event.key !== "Delete" || !selectedCircleId) {
+        return;
+      }
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(target.tagName)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      deleteCircle(selectedCircleId);
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedCircleId]);
+
   function toggleTarget(targetId, checked) {
     setSelectedIds((current) => {
       const next = new Set(current);
@@ -370,6 +497,165 @@ export default function App() {
     ].slice(0, MAX_OPERATION_STATUSES));
   }
 
+  function createCircle(values) {
+    const id = `circle-${String(circleIdRef.current + 1).padStart(3, "0")}`;
+    circleIdRef.current += 1;
+    setCircles((current) => [...current, { id, ...values, visible: true }]);
+    setSelectedCircleId(id);
+    pushOperationStatus(`已创建圆圈 ${id}`);
+  }
+
+  function toggleCircle(circleId, visible) {
+    setCircles((current) =>
+      current.map((circle) =>
+        circle.id === circleId ? { ...circle, visible } : circle,
+      ),
+    );
+    pushOperationStatus(visible ? `已显示圆圈 ${circleId}` : `已隐藏圆圈 ${circleId}`);
+  }
+
+  function toggleAllCircles(visible) {
+    setCircles((current) => current.map((circle) => ({ ...circle, visible })));
+    pushOperationStatus(visible ? "已显示全部圆圈" : "已隐藏全部圆圈");
+  }
+
+  function deleteCircle(circleId) {
+    setCircles((current) => current.filter((circle) => circle.id !== circleId));
+    setSelectedCircleId((current) => (current === circleId ? null : current));
+    pushOperationStatus(`已删除圆圈 ${circleId}`);
+  }
+
+  function locateCircle(circle) {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed()) {
+      return;
+    }
+    const height = viewer.camera.positionCartographic.height;
+    viewer.camera.flyTo({
+      destination: Cartesian3.fromDegrees(circle.longitude, circle.latitude, height),
+      orientation: {
+        heading: viewer.camera.heading,
+        pitch: viewer.camera.pitch,
+        roll: viewer.camera.roll,
+      },
+      duration: 0.6,
+    });
+    setSelectedCircleId(circle.id);
+    pushOperationStatus(`视角已定位到圆圈 ${circle.id}`);
+  }
+
+  function closeCirclePanel() {
+    setCirclePanelOpen(false);
+    setCirclePickMode(false);
+  }
+
+  function closeNearbyPanel() {
+    setNearbyPanelOpen(false);
+    setNearbyPickMode(false);
+  }
+
+  function addTestTargets(values) {
+    const existingCategory = targets.find(
+      (target) => target.categoryName === values.categoryName,
+    );
+    const categoryId =
+      existingCategory?.categoryId ||
+      `test-${values.categoryName.toLowerCase().replace(/\s+/g, "-")}`;
+    const generatedTargets = createTestTargets({
+      ...values,
+      categoryId,
+      existingIds: targets.map((target) => target.id),
+    }).map((target) => new StaticTarget(target));
+
+    setTargets((current) => [...current, ...generatedTargets]);
+    setNearbySelectedIds(new Set());
+    setMessage(`已生成 ${generatedTargets.length} 个${values.categoryName}测试目标`);
+    pushOperationStatus(
+      `已生成 ${generatedTargets.length} 个${values.categoryName}测试目标，并加入目标数据`,
+    );
+  }
+
+  function toggleCirclePickMode(enabled) {
+    setCirclePickMode(enabled);
+    if (enabled) {
+      setNearbyPickMode(false);
+    }
+  }
+
+  function toggleNearbyPickMode(enabled) {
+    setNearbyPickMode(enabled);
+    if (enabled) {
+      setCirclePickMode(false);
+    }
+  }
+
+  function runNearbyQuery(options, errorMessage) {
+    if (errorMessage) {
+      setNearbyQueryResult(null);
+      setNearbyQueryError(errorMessage);
+      return;
+    }
+
+    const result = queryNearbyTargets(targets, { ...options, spatialHash });
+    setNearbyQueryError("");
+    setNearbySelectedIds(new Set());
+    setNearbyQueryResult({
+      ...result,
+      methodLabel:
+        options.method === "spatial-hash"
+          ? "方法二：Spatial Hash"
+          : "方法一：全量遍历",
+    });
+    pushOperationStatus(
+      options.queryType === "nearest"
+        ? `已完成最近 ${options.limit} 个目标查询`
+        : `已完成 ${options.radiusKm} km 范围目标查询`,
+    );
+  }
+
+  function toggleNearbyTarget(target, checked) {
+    setNearbySelectedIds((current) => {
+      const next = new Set(current);
+      if (checked) {
+        next.add(target.id);
+      } else {
+        next.delete(target.id);
+      }
+      return next;
+    });
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (checked) {
+        next.add(target.id);
+      } else {
+        next.delete(target.id);
+      }
+      return next;
+    });
+    pushOperationStatus(
+      checked ? `已将目标 ${target.id} 上图` : `已取消目标 ${target.id} 上图`,
+    );
+  }
+
+  function toggleAllNearbyTargets(checked) {
+    const resultTargets = nearbyQueryResult?.rows || [];
+    setNearbySelectedIds(
+      checked ? new Set(resultTargets.map((target) => target.id)) : new Set(),
+    );
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      resultTargets.forEach((target) => {
+        if (checked) {
+          next.add(target.id);
+        } else {
+          next.delete(target.id);
+        }
+      });
+      return next;
+    });
+    pushOperationStatus(checked ? "已将近邻查询结果全部上图" : "已取消近邻查询结果上图");
+  }
+
   async function importTargets(file) {
     try {
       const content = JSON.parse(await file.text());
@@ -388,6 +674,7 @@ export default function App() {
 
       setTargets(importedTargets);
       setSelectedIds(new Set());
+      setNearbySelectedIds(new Set());
       setMessage(`已导入 ${importedTargets.length} 个目标，原数据已替换`);
       pushOperationStatus(`已导入 ${importedTargets.length} 个目标`);
     } catch (error) {
@@ -573,12 +860,18 @@ export default function App() {
 
       <MapToolButtons
         assistantOpen={assistantOpen}
+        circlePanelOpen={circlePanelOpen}
+        nearbyPanelOpen={nearbyPanelOpen}
+        testDataPanelOpen={testDataPanelOpen}
         gridVisible={gridVisible}
         metricsVisible={metricsVisible}
         operationStatusVisible={operationStatusVisible}
         selectedCount={selectedIds.size}
         targetPanelOpen={panelOpen}
         onToggleAssistant={() => setAssistantOpen((open) => !open)}
+        onToggleCirclePanel={() => setCirclePanelOpen((open) => !open)}
+        onToggleNearbyPanel={() => setNearbyPanelOpen((open) => !open)}
+        onToggleTestDataPanel={() => setTestDataPanelOpen((open) => !open)}
         onToggleGrid={toggleGrid}
         onToggleMetrics={() => setMetricsVisible((visible) => !visible)}
         onToggleOperationStatus={() =>
@@ -587,8 +880,52 @@ export default function App() {
         onToggleTargetPanel={() => setPanelOpen((open) => !open)}
       />
 
+      {circlePanelOpen && (
+        <CirclePanel
+          circles={circles}
+          pickedPoint={pickedCirclePoint}
+          pickMode={circlePickMode}
+          selectedCircleId={selectedCircleId}
+          onClose={closeCirclePanel}
+          onCreate={createCircle}
+          onTogglePickMode={toggleCirclePickMode}
+          onToggleCircle={toggleCircle}
+          onToggleAll={toggleAllCircles}
+          onLocate={locateCircle}
+          onDelete={deleteCircle}
+          onSelectCircle={setSelectedCircleId}
+        />
+      )}
+
+      {nearbyPanelOpen && (
+        <NearbyPanel
+          checkedIds={nearbySelectedIds}
+          error={nearbyQueryError}
+          pickedPoint={pickedNearbyPoint}
+          pickMode={nearbyPickMode}
+          queryResult={nearbyQueryResult}
+          onClose={closeNearbyPanel}
+          onQuery={runNearbyQuery}
+          onToggleAll={toggleAllNearbyTargets}
+          onTogglePickMode={toggleNearbyPickMode}
+          onToggleTarget={toggleNearbyTarget}
+        />
+      )}
+
+      {testDataPanelOpen && (
+        <TestDataPanel
+          onClose={() => setTestDataPanelOpen(false)}
+          onGenerate={addTestTargets}
+        />
+      )}
+
       {operationStatusVisible && (
-        <section className="operation-status-panel" aria-label="操作状态">
+        <section
+          className="operation-status-panel"
+          aria-label="操作状态"
+          style={operationStatusDrag.dragStyle}
+          onPointerDown={operationStatusDrag.handlePointerDown}
+        >
           <h2>操作状态</h2>
           <div className="operation-status-list" aria-live="polite">
             {operationStatuses.length > 0 ? (
@@ -606,7 +943,12 @@ export default function App() {
       )}
 
       {metricsVisible && (
-        <section className="view-metrics-panel" aria-label="实时视角信息">
+        <section
+          className="view-metrics-panel"
+          aria-label="实时视角信息"
+          style={metricsDrag.dragStyle}
+          onPointerDown={metricsDrag.handlePointerDown}
+        >
           <span>视角高度</span>
           <strong>{formatHeight(viewMetrics.height)}</strong>
           <span>中心比例尺</span>

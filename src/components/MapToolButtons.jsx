@@ -43,17 +43,50 @@ function OperationStatusIcon() {
   );
 }
 
+function CircleIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="7" />
+      <path d="M12 2v4M12 18v4M2 12h4M18 12h4" />
+    </svg>
+  );
+}
+
+function NearbyIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="10.5" cy="10.5" r="5.5" />
+      <path d="m15 15 5 5M10.5 8v5M8 10.5h5" />
+    </svg>
+  );
+}
+
+function TestDataIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M6 3h8l4 4v14H6z" />
+      <path d="M14 3v5h5M9 12h6M12 9v6" />
+    </svg>
+  );
+}
+
 export default function MapToolButtons({
   assistantOpen,
   gridVisible,
   metricsVisible,
   operationStatusVisible,
+  circlePanelOpen,
+  nearbyPanelOpen,
+  testDataPanelOpen,
   selectedCount,
   targetPanelOpen,
   onToggleAssistant,
   onToggleGrid,
   onToggleMetrics,
   onToggleOperationStatus,
+  onToggleCirclePanel,
+  onToggleNearbyPanel,
+  onToggleTestDataPanel,
   onToggleTargetPanel,
 }) {
   return (
@@ -100,6 +133,36 @@ export default function MapToolButtons({
         onClick={onToggleOperationStatus}
       >
         <OperationStatusIcon />
+      </button>
+      <button
+        className={`map-tool-button ${circlePanelOpen ? "is-active" : ""}`}
+        type="button"
+        aria-label="圆形标绘"
+        aria-pressed={circlePanelOpen}
+        data-tooltip="圆形标绘"
+        onClick={onToggleCirclePanel}
+      >
+        <CircleIcon />
+      </button>
+      <button
+        className={`map-tool-button ${nearbyPanelOpen ? "is-active" : ""}`}
+        type="button"
+        aria-label="近邻查询"
+        aria-pressed={nearbyPanelOpen}
+        data-tooltip="近邻查询"
+        onClick={onToggleNearbyPanel}
+      >
+        <NearbyIcon />
+      </button>
+      <button
+        className={`map-tool-button ${testDataPanelOpen ? "is-active" : ""}`}
+        type="button"
+        aria-label="添加测试数据"
+        aria-pressed={testDataPanelOpen}
+        data-tooltip="添加测试数据"
+        onClick={onToggleTestDataPanel}
+      >
+        <TestDataIcon />
       </button>
       <button
         className={`map-tool-button ${assistantOpen ? "is-active" : ""}`}

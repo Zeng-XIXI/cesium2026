@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import useDraggable from "../hooks/useDraggable.js";
 
 function CategoryGroup({
   category,
@@ -107,6 +108,7 @@ export default function TargetPanel({
   onOperationStatus,
 }) {
   const fileInputRef = useRef(null);
+  const { dragStyle, handlePointerDown } = useDraggable();
   const [expandedIds, setExpandedIds] = useState(() => new Set(["airport"]));
   const categories = useMemo(() => {
     const groups = new Map();
@@ -147,8 +149,8 @@ export default function TargetPanel({
   }
 
   return (
-    <aside className="target-panel" aria-label="目标数据列表">
-      <header className="target-panel-header">
+    <aside className="target-panel" aria-label="目标数据列表" style={dragStyle}>
+      <header className="target-panel-header" onPointerDown={handlePointerDown}>
         <div>
           <h1>目标数据</h1>
           <p>
@@ -159,6 +161,7 @@ export default function TargetPanel({
           className="panel-close-button"
           type="button"
           aria-label="关闭目标数据列表"
+          onPointerDown={(event) => event.stopPropagation()}
           onClick={onClose}
         >
           ×
