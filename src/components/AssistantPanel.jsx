@@ -1,12 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import MarkdownContent from "./MarkdownContent.jsx";
+import TargetTable from "./TargetTable.jsx";
 
 const initialMessages = [
   {
     id: "welcome",
     role: "assistant",
-    content:
-      "你好，我可以查询目标数据，也可以操作地图。\n\n试试输入：\n\n- `打开目标数据`\n- `显示全部机场`\n- `清空地图`",
+    blocks: [
+      {
+        id: "welcome-text",
+        type: "text",
+        content:
+          "你好，我可以查询目标数据，也可以操作地图。\n\n试试输入：\n\n- `打开目标数据`\n- `显示全部机场`\n- `分析当前批次目标，并展示经纬度信息`",
+      },
+    ],
   },
 ];
 
@@ -29,27 +36,71 @@ export default function AssistantPanel({ onClose, onSend }) {
 
     const timestamp = Date.now();
     const assistantMessageId = `assistant-${timestamp}`;
+    const firstBlockId = `block-${timestamp}-first`;
     setMessages((current) => [
       ...current,
-      { id: `user-${timestamp}`, role: "user", content },
-      { id: assistantMessageId, role: "assistant", content: "" },
+      {
+        id: `user-${timestamp}`,
+        role: "user",
+        blocks: [
+          {
+            id: `block-${timestamp}-user`,
+            type: "text",
+            content,
+          },
+        ],
+      },
+      {
+        id: assistantMessageId,
+        role: "assistant",
+        blocks: [{ id: firstBlockId, type: "text", content: "" }],
+      },
     ]);
     setInput("");
     setSending(true);
 
-    function updateAssistantMessage(nextContent) {
+    function updateAssistantMessage(nextContent, blockId = firstBlockId) {
       setMessages((current) =>
         current.map((message) =>
-          message.id === assistantMessageId
-            ? { ...message, content: nextContent }
-            : message,
+          message.id !== assistantMessageId
+            ? message
+            : {
+                ...message,
+                blocks: message.blocks.map((block) =>
+                  block.id === blockId
+                    ? { ...block, content: nextContent }
+                    : block,
+                ),
+              },
         ),
       );
     }
 
+    function insertAssistantBlock(block) {
+      const blockId = `${assistantMessageId}-${Date.now()}-${Math.random()}`;
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === assistantMessageId
+            ? {
+                ...message,
+                blocks: [...message.blocks, { ...block, id: blockId }],
+              }
+            : message,
+        ),
+      );
+      return blockId;
+    }
+
     try {
-      const reply = await onSend(content, mode, updateAssistantMessage);
-      updateAssistantMessage(reply);
+      const reply = await onSend(
+        content,
+        mode,
+        updateAssistantMessage,
+        insertAssistantBlock,
+      );
+      if (typeof reply === "string") {
+        updateAssistantMessage(reply);
+      }
     } catch (error) {
       updateAssistantMessage(
         `**请求失败：** ${error.message}\n\n请确认 DeepSeek 后端已在 \`127.0.0.1:8000\` 启动。`,
@@ -76,7 +127,9 @@ export default function AssistantPanel({ onClose, onSend }) {
       <header className="assistant-header">
         <div>
           <h1>智能助手</h1>
-          <p>{mode === "deepseek" ? "DeepSeek 流式问答" : "本地控制模式"}</p>
+          <p>
+            {mode === "deepseek" ? "DeepSeek 流式问答 + 工具调用" : "本地控制模式"}
+          </p>
         </div>
         <button
           className="panel-close-button"
@@ -118,10 +171,16 @@ export default function AssistantPanel({ onClose, onSend }) {
             <span className="chat-role">
               {message.role === "assistant" ? "助手" : "你"}
             </span>
-            {message.content ? (
-              <MarkdownContent content={message.content} />
-            ) : (
-              <div className="chat-markdown typing-indicator">正在思考…</div>
+            {message.blocks.map((block) =>
+              block.type === "table" ? (
+                <TargetTable key={block.id} rows={block.rows} />
+              ) : block.content ? (
+                <MarkdownContent key={block.id} content={block.content} />
+              ) : (
+                <div className="chat-markdown typing-indicator" key={block.id}>
+                  正在思考…
+                </div>
+              ),
             )}
           </div>
         ))}

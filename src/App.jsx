@@ -30,6 +30,19 @@ import {
 
 const cssPixelMeters = 0.0254 / 96;
 
+// 操作状态最多保留的消息数量，可按需调整。
+const MAX_OPERATION_STATUSES = 8;
+// 操作状态左侧时间的显示格式，可按需调整。
+const OPERATION_STATUS_TIME_OPTIONS = {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+};
+
 function readViewMetrics(viewer) {
   const { camera, scene } = viewer;
   const { clientWidth, clientHeight } = scene.canvas;
@@ -69,6 +82,51 @@ function formatScale(scale) {
   return scale ? `1 : ${scale.toLocaleString("zh-CN")}` : "无法计算";
 }
 
+function formatOperationStatusTime(date) {
+  return new Intl.DateTimeFormat(
+    "zh-CN",
+    OPERATION_STATUS_TIME_OPTIONS,
+  ).format(date);
+}
+
+function calculateTargetStatistics(rows) {
+  const categoryCounts = rows.reduce((result, row) => {
+    const categoryName = row.categoryName || "未分类";
+    result[categoryName] = (result[categoryName] || 0) + 1;
+    return result;
+  }, {});
+  const longitudes = rows.map((row) => Number(row.longitude));
+  const latitudes = rows.map((row) => Number(row.latitude));
+
+  return {
+    total: rows.length,
+    categoryCounts,
+    longitudeRange: longitudes.length
+      ? [Math.min(...longitudes), Math.max(...longitudes)]
+      : [],
+    latitudeRange: latitudes.length
+      ? [Math.min(...latitudes), Math.max(...latitudes)]
+      : [],
+  };
+}
+
+function buildSummaryPrompt(question, statistics) {
+  return `请根据用户问题和程序计算出的真实统计结果，生成简洁的最终总结。
+不要编造或修改任何目标数量、类别数量、经纬度范围；如果数据为空，请明确说明没有查询到目标。
+
+用户问题：${question}
+
+程序统计结果：
+${JSON.stringify(statistics, null, 2)}`;
+}
+
+function queryTargetsFromLocalData(targets, toolCall) {
+  const categoryId = toolCall.arguments?.categoryId;
+  return categoryId
+    ? targets.filter((target) => target.categoryId === categoryId)
+    : targets;
+}
+
 export default function App() {
   const containerRef = useRef(null);
   const viewerRef = useRef(null);
@@ -78,6 +136,8 @@ export default function App() {
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [gridVisible, setGridVisible] = useState(false);
   const [metricsVisible, setMetricsVisible] = useState(false);
+  const [operationStatusVisible, setOperationStatusVisible] = useState(false);
+  const [operationStatuses, setOperationStatuses] = useState([]);
   const [aggregationEnabled, setAggregationEnabled] = useState(true);
   const [aggregationRealtime, setAggregationRealtime] = useState(false);
   const [viewMetrics, setViewMetrics] = useState({
@@ -89,6 +149,7 @@ export default function App() {
   const [showTargetNames, setShowTargetNames] = useState(true);
   const [gridLevel, setGridLevel] = useState(gridLevelRef.current);
   const [message, setMessage] = useState("");
+  const operationStatusIdRef = useRef(0);
   const displayTargets = useMemo(
     () =>
       aggregateTargetsByGrid(
@@ -285,6 +346,7 @@ export default function App() {
       viewer.imageryLayers.remove(gridLayerRef.current, true);
       gridLayerRef.current = null;
       setGridVisible(false);
+      pushOperationStatus("已关闭剖分网格");
       return;
     }
 
@@ -294,6 +356,18 @@ export default function App() {
       }),
     );
     setGridVisible(true);
+    pushOperationStatus("已打开剖分网格");
+  }
+
+  function pushOperationStatus(text) {
+    setOperationStatuses((current) => [
+      {
+        id: ++operationStatusIdRef.current,
+        time: formatOperationStatusTime(new Date()),
+        text,
+      },
+      ...current,
+    ].slice(0, MAX_OPERATION_STATUSES));
   }
 
   async function importTargets(file) {
@@ -315,8 +389,10 @@ export default function App() {
       setTargets(importedTargets);
       setSelectedIds(new Set());
       setMessage(`已导入 ${importedTargets.length} 个目标，原数据已替换`);
+      pushOperationStatus(`已导入 ${importedTargets.length} 个目标`);
     } catch (error) {
       setMessage(`导入失败：${error.message}`);
+      pushOperationStatus(`导入失败：${error.message}`);
     }
   }
 
@@ -339,13 +415,15 @@ export default function App() {
     link.click();
     URL.revokeObjectURL(url);
     setMessage(`已导出 ${targets.length} 个目标`);
+    pushOperationStatus(`已导出 ${targets.length} 个目标`);
   }
 
-  async function handleAssistantMessage(userMessage, mode, onProgress) {
-    if (mode === "deepseek") {
-      return streamDeepSeek(userMessage, onProgress);
-    }
-
+  async function handleAssistantMessage(
+    userMessage,
+    mode,
+    onProgress,
+    onInsertBlock,
+  ) {
     const categories = [...new Set(targets.map((target) => target.categoryId))].map(
       (categoryId) => {
         const categoryTargets = targets.filter(
@@ -358,6 +436,47 @@ export default function App() {
         };
       },
     );
+
+    if (mode === "deepseek") {
+      const phaseOne = await streamDeepSeek(
+        userMessage,
+        { categories, stage: "analysis" },
+        onProgress,
+      );
+      applyAssistantActions(phaseOne.actions);
+
+      const queryCall = phaseOne.toolCalls.find(
+        (toolCall) => toolCall.name === "query_targets",
+      );
+      if (!queryCall) {
+        if (!phaseOne.reply) {
+          onProgress(formatAssistantActions(phaseOne.actions, categories));
+        }
+        return null;
+      }
+
+      if (!phaseOne.reply) {
+        onProgress("已识别查询意图，正在查询真实目标数据。");
+      }
+
+      const rows = queryTargetsFromLocalData(targets, queryCall);
+      onInsertBlock({ type: "table", rows });
+
+      const summaryBlockId = onInsertBlock({
+        type: "text",
+        content: "",
+      });
+      const summary = await streamDeepSeek(
+        buildSummaryPrompt(userMessage, calculateTargetStatistics(rows)),
+        { categories, stage: "summary" },
+        (text) => onProgress(text, summaryBlockId),
+      );
+      if (!summary.reply) {
+        onProgress("已完成真实目标数据统计。", summaryBlockId);
+      }
+      return null;
+    }
+
     const result = askLocalAssistant(userMessage, {
       targetCount: targets.length,
       selectedCount: selectedIds.size,
@@ -365,6 +484,12 @@ export default function App() {
       categories,
     });
 
+    applyAssistantActions(result.actions);
+    onProgress(result.reply);
+    return result.reply;
+  }
+
+  function applyAssistantActions(inputActions) {
     const allowedActions = new Set([
       "open-target-panel",
       "close-target-panel",
@@ -373,7 +498,7 @@ export default function App() {
       "select-category",
       "deselect-category",
     ]);
-    const actions = result.actions.filter((action) =>
+    const actions = inputActions.filter((action) =>
       allowedActions.has(action.type),
     );
 
@@ -414,9 +539,32 @@ export default function App() {
 
       return next;
     });
+  }
 
-    onProgress(result.reply);
-    return result.reply;
+  function formatAssistantActions(actions, categories) {
+    const categoryById = new Map(categories.map((category) => [category.id, category]));
+    const messages = actions.map((action) => {
+      if (action.type === "select-category") {
+        return `已显示全部${categoryById.get(action.categoryId)?.name || "目标"}。`;
+      }
+      if (action.type === "deselect-category") {
+        return `已隐藏全部${categoryById.get(action.categoryId)?.name || "目标"}。`;
+      }
+      if (action.type === "select-all-targets") {
+        return `已显示全部 ${targets.length} 个目标。`;
+      }
+      if (action.type === "clear-all-targets") {
+        return "已清空地图上的全部目标。";
+      }
+      if (action.type === "open-target-panel") {
+        return "已打开左侧目标数据列表。";
+      }
+      if (action.type === "close-target-panel") {
+        return "已关闭左侧目标数据列表。";
+      }
+      return "已执行地图操作。";
+    });
+    return messages.join("\n\n") || "已处理你的地图指令。";
   }
 
   return (
@@ -427,13 +575,35 @@ export default function App() {
         assistantOpen={assistantOpen}
         gridVisible={gridVisible}
         metricsVisible={metricsVisible}
+        operationStatusVisible={operationStatusVisible}
         selectedCount={selectedIds.size}
         targetPanelOpen={panelOpen}
         onToggleAssistant={() => setAssistantOpen((open) => !open)}
         onToggleGrid={toggleGrid}
         onToggleMetrics={() => setMetricsVisible((visible) => !visible)}
+        onToggleOperationStatus={() =>
+          setOperationStatusVisible((visible) => !visible)
+        }
         onToggleTargetPanel={() => setPanelOpen((open) => !open)}
       />
+
+      {operationStatusVisible && (
+        <section className="operation-status-panel" aria-label="操作状态">
+          <h2>操作状态</h2>
+          <div className="operation-status-list" aria-live="polite">
+            {operationStatuses.length > 0 ? (
+              operationStatuses.map((status) => (
+                <p key={status.id} className="operation-status-item">
+                  <time>{status.time}</time>
+                  <span>{status.text}</span>
+                </p>
+              ))
+            ) : (
+              <p className="operation-status-empty">暂无操作状态</p>
+            )}
+          </div>
+        </section>
+      )}
 
       {metricsVisible && (
         <section className="view-metrics-panel" aria-label="实时视角信息">
@@ -461,6 +631,7 @@ export default function App() {
           onToggleCategory={toggleCategory}
           onToggleTargetNames={setShowTargetNames}
           onToggleTarget={toggleTarget}
+          onOperationStatus={pushOperationStatus}
         />
       )}
 

@@ -253,7 +253,7 @@ viewer.camera.positionCartographic.height
 智能助手有两种模式：
 
 - 本地控制
-- DeepSeek 流式问答
+- DeepSeek 流式问答和工具调用
 
 本地控制目前支持：
 
@@ -262,6 +262,9 @@ viewer.camera.positionCartographic.height
 - 显示或隐藏指定类别。
 - 清空地图目标。
 - 查询目标数量和分类统计。
+- 右上角“操作状态”按钮控制右下角半透明状态面板。
+- 勾选、取消勾选、聚合切换、名称显示和数据导入导出等操作会记录在状态面板中。
+- 状态面板固定高度，消息左侧显示日期时间，时间为蓝色、状态文字为白色；即使没有消息，打开按钮也会显示空面板。
 
 例如输入“显示全部机场”后，助手会修改地图选择状态，并回复执行结果。
 
@@ -294,22 +297,40 @@ select-category
 deselect-category
 ```
 
+DeepSeek 模式同样支持地图操作。前端会把当前类别 ID 和名称传给 Python 后端，后端通过 DeepSeek Chat Completions 的 `tools` 参数声明地图工具。模型识别到“显示所有的机场”后，会在 SSE 流中返回类似下面的工具调用：
+
+```json
+{
+  "name": "select_category",
+  "arguments": {
+    "categoryId": "airport"
+  }
+}
+```
+
+前端只接受白名单中的工具名，并将下划线格式映射为已有的界面 Action，例如 `select_category` 映射为 `select-category`，随后勾选所有 `categoryId === "airport"` 的目标。模型不能直接执行 JavaScript，也不能操作白名单之外的状态。
+
 主要代码：
 
 - [智能助手窗口](</Users/allen/Documents/ChatGPT/myCesuimDemo 2/src/components/AssistantPanel.jsx:13>)
 - [本地意图识别](</Users/allen/Documents/ChatGPT/myCesuimDemo 2/src/services/assistantService.js:4>)
 - [动作白名单与执行](</Users/allen/Documents/ChatGPT/myCesuimDemo 2/src/App.jsx:344>)
+- [操作状态面板](</Users/allen/Documents/ChatGPT/myCesuimDemo 2/src/App.jsx:469>)
 
 ---
 
-## 9. DeepSeek SSE 流式问答和 Markdown
+## 9. DeepSeek SSE 流式问答、Markdown 和 Function Call
 
 实现效果：
 
+- 目标分析类问题由前端编排三个阶段：LLM 前置分析、业务数据查询、LLM 总结分析。
 - 前端通过 `POST /chat` 请求 Python 服务。
 - 前端与 Python 后端使用 SSE 流式读取。
 - Python 后端与 DeepSeek 同样使用流式请求。
 - 每收到一段增量内容，就更新当前助手气泡。
+- 工具调用参数也按 SSE 增量分片接收，前端拼接完整 JSON 后再校验和执行。
+- 阶段二不再请求后端查询接口；前端直接使用当前 `targets` 状态筛选真实目标并渲染表格，不让 LLM 生成经纬度。
+- “显示所有的机场”等指令会调用 `select_category`，而不是再次依赖前端正则匹配。
 - 所有用户和助手气泡均支持 Markdown。
 - 支持标题、列表、粗体、代码块和换行。
 - Markdown 转 HTML 后通过 DOMPurify 清理，降低 XSS 风险。
@@ -318,27 +339,44 @@ deselect-category
 
 ```text
 AssistantPanel
+    ↓ 阶段一：fetch POST /chat（analysis）
+前置分析文本 + query_targets 工具参数
+    ↓ 阶段二：前端 queryTargetsFromLocalData()
+真实目标结构化数据
+    ↓ 前端生成表格并计算统计结果
+    ↓ 阶段三：fetch POST /chat（summary）
+总结文本 SSE
     ↓
+消息 blocks：text → table → text
+
 assistantService.streamDeepSeek()
-    ↓ fetch POST /chat
+    ↓
 FastAPI
-    ↓ httpx.stream()
-DeepSeek API
-    ↓ SSE 增量
-FastAPI StreamingResponse
-    ↓ SSE 增量
-React 累加 Markdown
+    ├─ httpx.stream() → DeepSeek API
+    └─ 透传 query_targets 查询意图，不读取目标数据
     ↓
-marked + DOMPurify
-    ↓
-更新当前对话气泡
+React 使用当前 targets 状态筛选数据，累加 Markdown、工具参数和结构化表格
 ```
 
 主要代码：
 
 - [前端 SSE 读取](</Users/allen/Documents/ChatGPT/myCesuimDemo 2/src/services/assistantService.js:80>)
+- [结构化目标表格](</Users/allen/Documents/ChatGPT/myCesuimDemo 2/src/components/TargetTable.jsx:1>)
+- [前端目标查询函数](</Users/allen/Documents/ChatGPT/myCesuimDemo 2/src/App.jsx:124>)
 - [Markdown 渲染](</Users/allen/Documents/ChatGPT/myCesuimDemo 2/src/components/MarkdownContent.jsx:1>)
 - [Python SSE 代理](</Users/allen/Documents/ChatGPT/myCesuimDemo 2/demo/main_SSE_DeepSeek.py:1>)
+
+Python 后端声明的地图工具包括：
+
+```text
+open_target_panel
+close_target_panel
+clear_all_targets
+select_all_targets
+select_category(categoryId)
+deselect_category(categoryId)
+query_targets(categoryId?)
+```
 
 DeepSeek 实际运行还需要：
 
@@ -358,4 +396,4 @@ uvicorn demo.main_SSE_DeepSeek:app --reload --port 8000
 - 官方剖分网格开关验证通过。
 - 高度和比例尺实时更新验证通过。
 - 智能助手本地操作地图验证通过。
-- DeepSeek 前后端 SSE 代码已接入；真实服务依赖有效的 `DEEPSEEK_KEY` 和运行中的 Python 后端。
+- DeepSeek 前后端 SSE、Markdown 和工具调用代码已接入；真实服务依赖有效的 `DEEPSEEK_KEY`、运行中的 Python 后端和可访问 DeepSeek API 的网络。

@@ -77,11 +77,15 @@ function readSseData(block) {
     .join("\n");
 }
 
-export async function streamDeepSeek(message, onProgress) {
+export async function streamDeepSeek(message, context, onProgress) {
   const response = await fetch(deepSeekApiUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt: message }),
+    body: JSON.stringify({
+      prompt: message,
+      categories: context.categories,
+      stage: context.stage || "answer",
+    }),
   });
 
   if (!response.ok) {
@@ -95,6 +99,15 @@ export async function streamDeepSeek(message, onProgress) {
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
   let fullText = "";
+  const toolCalls = new Map();
+  const actionTypeMap = {
+    open_target_panel: "open-target-panel",
+    close_target_panel: "close-target-panel",
+    clear_all_targets: "clear-all-targets",
+    select_all_targets: "select-all-targets",
+    select_category: "select-category",
+    deselect_category: "deselect-category",
+  };
 
   function consumeBlock(block) {
     const data = readSseData(block);
@@ -103,11 +116,26 @@ export async function streamDeepSeek(message, onProgress) {
     }
 
     const json = JSON.parse(data);
-    const delta = json.choices?.[0]?.delta?.content || "";
-    if (delta) {
-      fullText += delta;
+    const delta = json.choices?.[0]?.delta;
+    const content = delta?.content || "";
+    if (content) {
+      fullText += content;
       onProgress(fullText);
     }
+
+    delta?.tool_calls?.forEach((toolCall) => {
+      const index = toolCall.index ?? 0;
+      const current = toolCalls.get(index) || {
+        id: toolCall.id || `deepseek-tool-${index}`,
+        name: "",
+        arguments: "",
+      };
+
+      current.id = toolCall.id || current.id;
+      current.name = toolCall.function?.name || current.name;
+      current.arguments += toolCall.function?.arguments || "";
+      toolCalls.set(index, current);
+    });
   }
 
   while (true) {
@@ -127,9 +155,22 @@ export async function streamDeepSeek(message, onProgress) {
     consumeBlock(buffer);
   }
 
-  if (!fullText) {
+  const parsedToolCalls = [...toolCalls.values()].flatMap((toolCall) => {
+    try {
+      const argumentsValue = JSON.parse(toolCall.arguments || "{}");
+      return [{ ...toolCall, arguments: argumentsValue }];
+    } catch {
+      return [];
+    }
+  });
+  const actions = parsedToolCalls.flatMap((toolCall) => {
+    const type = actionTypeMap[toolCall.name];
+    return type ? [{ type, ...toolCall.arguments }] : [];
+  });
+
+  if (!fullText && !actions.length && !parsedToolCalls.length) {
     throw new Error("DeepSeek 没有返回文本内容");
   }
 
-  return fullText;
+  return { reply: fullText, actions, toolCalls: parsedToolCalls };
 }

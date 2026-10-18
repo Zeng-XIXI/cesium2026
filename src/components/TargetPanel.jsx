@@ -7,6 +7,7 @@ function CategoryGroup({
   onToggleExpanded,
   onToggleCategory,
   onToggleTarget,
+  onOperationStatus,
 }) {
   const checkboxRef = useRef(null);
   const selectedCount = category.targets.filter((target) =>
@@ -34,9 +35,14 @@ function CategoryGroup({
           ref={checkboxRef}
           type="checkbox"
           checked={allSelected}
-          onChange={(event) =>
-            onToggleCategory(category.targets, event.target.checked)
-          }
+          onChange={(event) => {
+            onToggleCategory(category.targets, event.target.checked);
+            onOperationStatus(
+              event.target.checked
+                ? `正在显示${category.name}目标点`
+                : `已取消显示${category.name}目标点`,
+            );
+          }}
         />
         <span
           className="category-color"
@@ -61,9 +67,12 @@ function CategoryGroup({
               <input
                 type="checkbox"
                 checked={selectedIds.has(target.id)}
-                onChange={(event) =>
-                  onToggleTarget(target.id, event.target.checked)
-                }
+                onChange={(event) => {
+                  onToggleTarget(target.id, event.target.checked);
+                  onOperationStatus(
+                    event.target.checked ? "正在显示目标点" : "已取消显示目标点",
+                  );
+                }}
               />
               <span className="target-item-content">
                 <span className="target-name">{target.name}</span>
@@ -95,6 +104,7 @@ export default function TargetPanel({
   onToggleCategory,
   onToggleTargetNames,
   onToggleTarget,
+  onOperationStatus,
 }) {
   const fileInputRef = useRef(null);
   const [expandedIds, setExpandedIds] = useState(() => new Set(["airport"]));
@@ -182,7 +192,12 @@ export default function TargetPanel({
           <input
             type="checkbox"
             checked={showTargetNames}
-            onChange={(event) => onToggleTargetNames(event.target.checked)}
+            onChange={(event) => {
+              onToggleTargetNames(event.target.checked);
+              onOperationStatus(
+                event.target.checked ? "正在显示目标名称" : "已取消显示目标名称",
+              );
+            }}
           />
           <span className="switch-track" aria-hidden="true" />
         </span>
@@ -197,7 +212,14 @@ export default function TargetPanel({
           <input
             type="checkbox"
             checked={aggregationEnabled}
-            onChange={(event) => onToggleAggregation(event.target.checked)}
+            onChange={(event) => {
+              onToggleAggregation(event.target.checked);
+              onOperationStatus(
+                event.target.checked
+                  ? "正在启用网格聚合"
+                  : "已取消网格聚合，正在显示原始目标",
+              );
+            }}
           />
           <span className="switch-track" aria-hidden="true" />
         </span>
@@ -219,9 +241,14 @@ export default function TargetPanel({
             type="checkbox"
             checked={aggregationRealtime}
             disabled={!aggregationEnabled}
-            onChange={(event) =>
-              onToggleAggregationRealtime(event.target.checked)
-            }
+            onChange={(event) => {
+              onToggleAggregationRealtime(event.target.checked);
+              onOperationStatus(
+                event.target.checked
+                  ? "已启用层级实时触发"
+                  : "已切换为相机停止后重新计算",
+              );
+            }}
           />
           <span className="switch-track" aria-hidden="true" />
         </span>
@@ -237,6 +264,7 @@ export default function TargetPanel({
             onToggleExpanded={toggleExpanded}
             onToggleCategory={onToggleCategory}
             onToggleTarget={onToggleTarget}
+            onOperationStatus={onOperationStatus}
           />
         ))}
       </div>

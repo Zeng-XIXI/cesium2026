@@ -34,15 +34,26 @@ function ViewMetricsIcon() {
   );
 }
 
+function OperationStatusIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M6 5h12v14H6z" />
+      <path d="M9 9h6M9 12h6M9 15h4" />
+    </svg>
+  );
+}
+
 export default function MapToolButtons({
   assistantOpen,
   gridVisible,
   metricsVisible,
+  operationStatusVisible,
   selectedCount,
   targetPanelOpen,
   onToggleAssistant,
   onToggleGrid,
   onToggleMetrics,
+  onToggleOperationStatus,
   onToggleTargetPanel,
 }) {
   return (
@@ -79,6 +90,16 @@ export default function MapToolButtons({
         onClick={onToggleGrid}
       >
         <GridIcon />
+      </button>
+      <button
+        className={`map-tool-button ${operationStatusVisible ? "is-active" : ""}`}
+        type="button"
+        aria-label="操作状态"
+        aria-pressed={operationStatusVisible}
+        data-tooltip="操作状态"
+        onClick={onToggleOperationStatus}
+      >
+        <OperationStatusIcon />
       </button>
       <button
         className={`map-tool-button ${assistantOpen ? "is-active" : ""}`}
